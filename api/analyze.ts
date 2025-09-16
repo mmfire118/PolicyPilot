@@ -93,16 +93,16 @@ export default async function handler(req: any, res: any) {
 
   try {
     const useJsonSchema = (process.env.OPENAI_USE_JSON_SCHEMA ?? 'true') !== 'false';
-    const responseFormat: any = useJsonSchema
-      ? { type: 'json_schema', json_schema: { name: 'PolicyPilotOutput', schema: policyPilotJsonSchema, strict: true } }
-      : { type: 'json_object' };
-
     const payload: any = {
       model,
       instructions: systemPrompt,
       input: JSON.stringify(userJson),
-      response_format: responseFormat,
     };
+    if (useJsonSchema) {
+      (payload as any).response_format = { type: 'json_schema', json_schema: { name: 'PolicyPilotOutput', schema: policyPilotJsonSchema, strict: true } };
+    } else {
+      (payload as any).text = { format: 'json' };
+    }
     if (process.env.OPENAI_TEMPERATURE) {
       const t = Number(process.env.OPENAI_TEMPERATURE);
       if (!Number.isNaN(t)) payload.temperature = t;
@@ -122,8 +122,12 @@ export default async function handler(req: any, res: any) {
       try {
         const errJson = JSON.parse(errText);
         const msg: string = errJson?.error?.message || '';
-        if (msg.includes('json_schema') || msg.includes('response_format')) {
-          const fallbackPayload = { ...payload, response_format: { type: 'json_object' } };
+        // If 'response_format' unsupported in Responses API, fallback to text.format JSON
+        const shouldFallback = msg.includes("Unsupported parameter: 'response_format'") || msg.includes('response_format');
+        if (shouldFallback) {
+          const fallbackPayload: any = { ...payload };
+          delete fallbackPayload.response_format;
+          fallbackPayload.text = { format: 'json' };
           openaiRes = await fetch('https://api.openai.com/v1/responses', {
             method: 'POST',
             headers: {
@@ -146,7 +150,7 @@ export default async function handler(req: any, res: any) {
 
     const data = await openaiRes.json();
     // Prefer convenience field if present
-    let textOut: any = (data && (data.output_text ?? data?.output?.[0]?.content?.[0]?.text)) || null;
+    let textOut: any = (data && (data.output_text ?? data?.output?.[0]?.content?.find((c: any) => c?.type === 'output_text' || c?.type === 'text')?.text ?? data?.output?.[0]?.content?.[0]?.text)) || null;
     let jsonOut: any = data?.output?.[0]?.content?.find((c: any) => c?.type === 'json')?.json ?? null;
 
     if (!textOut && !jsonOut) {
