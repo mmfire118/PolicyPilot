@@ -40,52 +40,128 @@ export default async function handler(req: any, res: any) {
 
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
-  const schemaHint = `Respond with strict JSON only, no markdown. Shape:\n{
-  "humanSummary": "string",
-  "json": {
-    "overlap": {"title": "string", "reason": "string", "what_to_verify": ["string"]},
-    "gap": {"title": "string", "reason": "string", "suggested_next_step": "string"},
-    "priority_review": [{"coverage": "string", "why": "string"}],
-    "assumptions": ["string"],
-    "not_validated": ["string"],
-    "disclaimer": "string"
-  }
-}`;
+  const policyPilotJsonSchema = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      humanSummary: { type: 'string' },
+      json: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          overlap: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              title: { type: 'string' },
+              reason: { type: 'string' },
+              what_to_verify: { type: 'array', items: { type: 'string' } }
+            },
+            required: ['title', 'reason', 'what_to_verify']
+          },
+          gap: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              title: { type: 'string' },
+              reason: { type: 'string' },
+              suggested_next_step: { type: 'string' }
+            },
+            required: ['title', 'reason', 'suggested_next_step']
+          },
+          priority_review: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                coverage: { type: 'string' },
+                why: { type: 'string' }
+              },
+              required: ['coverage', 'why']
+            }
+          },
+          assumptions: { type: 'array', items: { type: 'string' } },
+          not_validated: { type: 'array', items: { type: 'string' } },
+          disclaimer: { type: 'string' }
+        },
+        required: ['overlap', 'gap', 'priority_review', 'assumptions', 'not_validated', 'disclaimer']
+      }
+    },
+    required: ['humanSummary', 'json']
+  } as const;
 
   try {
-    const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
+    const useJsonSchema = (process.env.OPENAI_USE_JSON_SCHEMA ?? 'true') !== 'false';
+    const responseFormat: any = useJsonSchema
+      ? { type: 'json_schema', json_schema: { name: 'PolicyPilotOutput', schema: policyPilotJsonSchema, strict: true } }
+      : { type: 'json_object' };
+
+    const payload: any = {
+      model,
+      instructions: systemPrompt,
+      input: JSON.stringify(userJson),
+      response_format: responseFormat,
+    };
+    if (process.env.OPENAI_TEMPERATURE) {
+      const t = Number(process.env.OPENAI_TEMPERATURE);
+      if (!Number.isNaN(t)) payload.temperature = t;
+    }
+
+    let openaiRes = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
-        model,
-        response_format: { type: 'json_object' },
-        temperature: 0.2,
-        messages: [
-          { role: 'system', content: `${systemPrompt}\n\n${schemaHint}` },
-          { role: 'user', content: JSON.stringify(userJson) },
-        ],
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (!openaiRes.ok) {
       const errText = await openaiRes.text();
-      return res.status(502).json({ error: 'OpenAI error', details: errText });
+      try {
+        const errJson = JSON.parse(errText);
+        const msg: string = errJson?.error?.message || '';
+        if (msg.includes('json_schema') || msg.includes('response_format')) {
+          const fallbackPayload = { ...payload, response_format: { type: 'json_object' } };
+          openaiRes = await fetch('https://api.openai.com/v1/responses', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify(fallbackPayload),
+          });
+          if (!openaiRes.ok) {
+            const secondErr = await openaiRes.text();
+            return res.status(502).json({ error: 'OpenAI error', details: secondErr });
+          }
+        } else {
+          return res.status(502).json({ error: 'OpenAI error', details: errText });
+        }
+      } catch {
+        return res.status(502).json({ error: 'OpenAI error', details: errText });
+      }
     }
 
     const data = await openaiRes.json();
-    const content = data?.choices?.[0]?.message?.content;
-    if (!content) {
+    // Prefer convenience field if present
+    let textOut: any = (data && (data.output_text ?? data?.output?.[0]?.content?.[0]?.text)) || null;
+    let jsonOut: any = data?.output?.[0]?.content?.find((c: any) => c?.type === 'json')?.json ?? null;
+
+    if (!textOut && !jsonOut) {
       return res.status(502).json({ error: 'OpenAI returned no content' });
+    }
+
+    if (jsonOut) {
+      return res.status(200).json(jsonOut);
     }
 
     let parsed: any;
     try {
-      parsed = JSON.parse(content);
+      parsed = typeof textOut === 'string' ? JSON.parse(textOut) : textOut;
     } catch (e: any) {
-      return res.status(502).json({ error: 'Invalid JSON from model', content });
+      return res.status(502).json({ error: 'Invalid JSON from model', content: textOut });
     }
 
     return res.status(200).json(parsed);
