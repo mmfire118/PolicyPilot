@@ -58,28 +58,26 @@ High-severity liability/dwelling/income first, then moderate-probability propert
 Tone: calm, practical, brief.`;
 
 export const analyzeWithLLM = async (intake: Intake): Promise<Output> => {
-  const LLM_API_URL = import.meta.env.VITE_LLM_API_URL;
-  
-  if (LLM_API_URL) {
-    try {
-      const response = await fetch(LLM_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          systemPrompt: SYSTEM_PROMPT,
-          userJson: intake
-        }),
-      });
+  const LLM_API_URL = import.meta.env.VITE_LLM_API_URL || '/api/analyze';
 
-      if (response.ok) {
-        const result = await response.json();
-        return result;
-      }
-    } catch (error) {
-      console.warn('LLM API failed, falling back to rules engine:', error);
+  try {
+    const response = await fetch(LLM_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        systemPrompt: SYSTEM_PROMPT,
+        userJson: intake
+      }),
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      return result;
     }
+  } catch (error) {
+    console.warn('LLM API failed, falling back to rules engine:', error);
   }
 
   // Fallback to rules engine
