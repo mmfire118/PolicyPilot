@@ -97,12 +97,12 @@ export default async function handler(req: any, res: any) {
       model,
       instructions: systemPrompt,
       input: JSON.stringify(userJson),
+      text: {
+        format: useJsonSchema
+          ? { type: 'json_schema', json_schema: { name: 'PolicyPilotOutput', schema: policyPilotJsonSchema, strict: true } }
+          : { type: 'json_object' }
+      }
     };
-    if (useJsonSchema) {
-      (payload as any).response_format = { type: 'json_schema', json_schema: { name: 'PolicyPilotOutput', schema: policyPilotJsonSchema, strict: true } };
-    } else {
-      (payload as any).text = { format: 'json' };
-    }
     if (process.env.OPENAI_TEMPERATURE) {
       const t = Number(process.env.OPENAI_TEMPERATURE);
       if (!Number.isNaN(t)) payload.temperature = t;
@@ -122,12 +122,10 @@ export default async function handler(req: any, res: any) {
       try {
         const errJson = JSON.parse(errText);
         const msg: string = errJson?.error?.message || '';
-        // If 'response_format' unsupported in Responses API, fallback to text.format JSON
-        const shouldFallback = msg.includes("Unsupported parameter: 'response_format'") || msg.includes('response_format');
+        // If schema or text.format rejected, fallback to simple JSON object format
+        const shouldFallback = msg.includes('json_schema') || msg.includes('text.format') || msg.includes('response_format');
         if (shouldFallback) {
-          const fallbackPayload: any = { ...payload };
-          delete fallbackPayload.response_format;
-          fallbackPayload.text = { format: 'json' };
+          const fallbackPayload: any = { ...payload, text: { format: { type: 'json_object' } } };
           openaiRes = await fetch('https://api.openai.com/v1/responses', {
             method: 'POST',
             headers: {
