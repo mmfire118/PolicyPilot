@@ -93,9 +93,11 @@ export default async function handler(req: any, res: any) {
 
   try {
     const useJsonSchema = (process.env.OPENAI_USE_JSON_SCHEMA ?? 'true') !== 'false';
+    const instructionsWithJson = `${systemPrompt}\n\nPlease respond with json only, no markdown or prose.`;
+
     const payload: any = {
       model,
-      instructions: systemPrompt,
+      instructions: instructionsWithJson,
       input: JSON.stringify(userJson),
       text: {
         format: useJsonSchema
