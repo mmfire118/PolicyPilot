@@ -103,7 +103,4 @@ curl -s -X POST https://<your-vercel-domain>/api/analyze \
 - Primary mode: Responses API with `text.format` structured outputs.
 - JSON Schema is stricter; if your model rejects it, the function retries with `json_object`.
 
-### License
-No license specified. Add one if you plan to distribute.
-
 
